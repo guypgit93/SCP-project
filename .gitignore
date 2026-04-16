@@ -48,6 +48,14 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
+<<<<<<< HEAD
+=======
+# Data (DO NOT COMMIT)
+data/
+*.csv
+*.rds
+
+>>>>>>> origin/main
 # LaTeX build files
 *.aux
 *.log
