@@ -47,3 +47,19 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Data (DO NOT COMMIT)
+data/
+*.csv
+*.rds
+
+# LaTeX build files
+*.aux
+*.log
+*.out
+*.toc
+*.gz
+*.synctex.gz
+
+# Mac system files
+.DS_Store
