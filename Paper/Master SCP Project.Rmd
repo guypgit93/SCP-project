@@ -9,15 +9,20 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
+library(haven)
+library(dplyr)
+library(lmtest)
+library(sandwich)
+library(stargazer)
+library(ggplot2)
+
 df_longdata <- readRDS(
-  path.expand("~/Library/CloudStorage/OneDrive-TheUniversityofManchester/Documents/ECON60052/Midterm/UKHLS_long_ijklmno.rds")
+  path.expand("~/python-venv-demo/SCP-project/Data/UKHLS_long_hijklmno.rds")
 )
 ```
 
 
 ```{r}
-library(dplyr)
-
 # Clean variables and construct main analysis variables
 df <- df_longdata %>%
   mutate(
@@ -30,10 +35,11 @@ df <- df_longdata %>%
     intdaty_dv = ifelse(intdaty_dv < 0, NA, intdaty_dv),
     intdatm_dv = ifelse(intdatm_dv < 0, NA, intdatm_dv),
 
-    # Children by age
-    nkids05  = ifelse(nkids05 < 0, NA, nkids05),
-    nkids615 = ifelse(nkids615 < 0, NA, nkids615),
-    nkids015 = ifelse(nkids015 < 0, NA, nkids015),
+    # Children
+    nkids05   = ifelse(nkids05 < 0, NA, nkids05),
+    nkids615  = ifelse(nkids615 < 0, NA, nkids615),
+    nkids015  = ifelse(nkids015 < 0, NA, nkids015),
+    nkids_dv  = ifelse(nkids_dv < 0, NA, nkids_dv),
 
     # Benefits
     benbase1 = ifelse(benbase1 < 0, NA, benbase1),
@@ -43,11 +49,13 @@ df <- df_longdata %>%
     benctc   = ifelse(benctc < 0, NA, benctc),
 
     # Demographics / controls
-    age_dv     = ifelse(age_dv < 0, NA, age_dv),
-    sex_dv     = ifelse(sex_dv < 0, NA, sex_dv),
-    jbstat     = ifelse(jbstat < 0, NA, jbstat),
-    hhtype_dv  = ifelse(hhtype_dv < 0, NA, hhtype_dv),
-    marstat_dv = ifelse(marstat_dv < 0, NA, marstat_dv),
+    age_dv      = ifelse(age_dv < 0, NA, age_dv),
+    sex_dv      = ifelse(sex_dv < 0, NA, sex_dv),
+    jbstat      = ifelse(jbstat < 0, NA, jbstat),
+    hhtype_dv   = ifelse(hhtype_dv < 0, NA, hhtype_dv),
+    marstat_dv  = ifelse(marstat_dv < 0, NA, marstat_dv),
+    ethn_dv     = ifelse(ethn_dv < 0, NA, ethn_dv),
+    health = ifelse(health < 0, NA, health),
 
     # Convenience timing vars
     year  = intdaty_dv,
@@ -60,10 +68,24 @@ df <- df_longdata %>%
       TRUE ~ 0
     ),
 
+    # Gender
+    female = case_when(
+      is.na(sex_dv) ~ NA_real_,
+      sex_dv == 2 ~ 1,
+      TRUE ~ 0
+    ),
+    
+    #Ethinicty
+    white_ethnicity = case_when(
+      is.na(ethn_dv) ~ NA_real_,
+      ethn_dv %in% c(1, 2, 4) ~ 1,
+      TRUE ~ 0
+    ),
+
     # Household structure
     partnered = case_when(
       is.na(marstat_dv) ~ NA_real_,
-      marstat_dv %in% c(1, 2) ~ 1,  # 1 Married/Civil partner, 2 Living as couple
+      marstat_dv %in% c(1, 2) ~ 1,   # married/civil partner or living as couple
       TRUE ~ 0
     ),
 
@@ -81,14 +103,11 @@ df <- df_longdata %>%
       TRUE ~ 0
     ),
 
-    # Child eligibility aligned to policy timing
+    # Full-rollout child eligibility (all children under 16)
     child_eligible = case_when(
-      is.na(year) | is.na(month) ~ NA_real_,
-      year < 2022 ~ ifelse(nkids05 > 0, 1, 0),
-      year == 2022 & month < 11 ~ ifelse(nkids05 > 0, 1, 0),
-      year > 2022 ~ ifelse(nkids015 > 0, 1, 0),
-      year == 2022 & month >= 11 ~ ifelse(nkids015 > 0, 1, 0),
-      TRUE ~ NA_real_
+      is.na(nkids015) ~ NA_real_,
+      nkids015 > 0 ~ 1,
+      TRUE ~ 0
     ),
 
     # Final eligibility proxy
@@ -98,44 +117,107 @@ df <- df_longdata %>%
       TRUE ~ 0
     ),
 
-    # Policy timing
+    # Policy timing: full rollout / expansion from Nov 2022
     post = case_when(
       is.na(year) | is.na(month) ~ NA_real_,
-      year > 2021 | (year == 2021 & month >= 2) ~ 1,
-      TRUE ~ 0
-    )
-  )
-
-# Analysis sample
-df_analysis <- df %>%
-  filter(
-    age_dv >= 18,
-    age_dv <= 65,
-    !is.na(ghq_likert),
-    !is.na(scotland),
-    !is.na(eligible),
-    !is.na(year),
-    !is.na(month)
-  ) %>%
-  mutate(
-    female = case_when(
-      is.na(sex_dv) ~ NA_real_,
-      sex_dv == 2 ~ 1,
+      year > 2022 | (year == 2022 & month >= 11) ~ 1,
       TRUE ~ 0
     ),
+
+    # Child/family controls
     has_young_kids = case_when(
       is.na(nkids05) ~ NA_real_,
       nkids05 > 0 ~ 1,
       TRUE ~ 0
     ),
-    has_any_kids = case_when(
+
+    larger_family = case_when(
       is.na(nkids015) ~ NA_real_,
-      nkids015 > 0 ~ 1,
+      nkids015 >= 3 ~ 1,
+      TRUE ~ 0
+    ),
+
+    # Broad age bands
+    age_band = case_when(
+      is.na(age_dv) ~ NA_character_,
+      age_dv <= 25 ~ "18-25",
+      age_dv <= 30 ~ "26-30",
+      age_dv <= 35 ~ "31-35",
+      age_dv <= 40 ~ "36-40",
+      TRUE ~ "41-65"
+    ),
+
+    # Long-term illness / disability dummy
+    disability = case_when(
+      is.na(health) ~ NA_real_,
+      health == 1 ~ 1,
+      health == 2 ~ 0,
+      TRUE ~ NA_real_
+    ),
+    
+    #quarterly dummies for event study
+    quarter = case_when(
+      month %in% 1:3   ~ "Q1",
+      month %in% 4:6   ~ "Q2",
+      month %in% 7:9   ~ "Q3",
+      month %in% 10:12 ~ "Q4"
+    ),
+    yq = paste0(year, "_", quarter),
+    yq.f = factor(yq)
+  )
+
+
+na_counts <- colSums(is.na(df))
+na_counts[order(-na_counts)]
+
+na_share <- colMeans(is.na(df))
+na_share[order(-na_share)]
+```
+```{r}
+# Analysis sample: working-age parents in Scotland vs England only
+df_analysis <- df %>%
+  filter(
+    age_dv >= 18,
+    age_dv <= 65,
+
+    # Parents only
+    !is.na(nkids015),
+    nkids015 > 0,
+
+    # Geography: Scotland (3) and England (1) only
+    country %in% c(1, 3),
+
+    # Core variables must be non-missing
+    !is.na(ghq_likert),
+    !is.na(scotland),
+    !is.na(eligible),
+    !is.na(year),
+    !is.na(month),
+
+    # Optional but recommended: ensure key controls are non-missing
+    !is.na(female),
+    !is.na(employed),
+    !is.na(partnered),
+    !is.na(disability),
+    !is.na(white_ethnicity),
+
+    # Drop COVID disruption period
+    !(year == 2020 & month >= 3),
+    !(year == 2021 & month <= 6)
+  ) %>%
+  mutate(
+    # Young children indicator (keep here or upstream — fine either way)
+    has_young_kids = case_when(
+      is.na(nkids05) ~ NA_real_,
+      nkids05 > 0 ~ 1,
       TRUE ~ 0
     )
   )
+```
 
-# Summary statistics
+
+```{r}
+# Summary statistics for analysis sample
 summary_stats <- df_analysis %>%
   summarise(
     N = n(),
@@ -146,32 +228,226 @@ summary_stats <- df_analysis %>%
     age_mean = mean(age_dv, na.rm = TRUE),
     age_sd   = sd(age_dv, na.rm = TRUE),
 
-    female_share    = mean(female, na.rm = TRUE),
-    employed_share  = mean(employed, na.rm = TRUE),
-    partnered_share = mean(partnered, na.rm = TRUE),
+    female_share      = mean(female, na.rm = TRUE),
+    employed_share    = mean(employed, na.rm = TRUE),
+    partnered_share   = mean(partnered, na.rm = TRUE),
+    white_ethnicity_share = mean(white_ethnicity, na.rm = TRUE),
 
-    young_kids_share = mean(has_young_kids, na.rm = TRUE),
-    any_kids_share   = mean(has_any_kids, na.rm = TRUE),
+    young_kids_share  = mean(has_young_kids, na.rm = TRUE),
+    larger_family_share = mean(larger_family, na.rm = TRUE),
 
-    benefit_share  = mean(benefit_eligible, na.rm = TRUE),
-    scotland_share = mean(scotland, na.rm = TRUE)
+    benefit_share     = mean(benefit_eligible, na.rm = TRUE),
+    disability_share  = mean(disability, na.rm = TRUE),
+    scotland_share    = mean(scotland, na.rm = TRUE)
   )
 
 summary_stats
 ```
+
+
 ```{r}
-summary_by_group <- df_analysis %>%
-  group_by(scotland, eligible) %>%
+# Summary statistics by country
+summary_by_country <- df_analysis %>%
+  group_by(scotland) %>%
   summarise(
     N = n(),
+
     ghq_mean = mean(ghq_likert, na.rm = TRUE),
     age_mean = mean(age_dv, na.rm = TRUE),
-    female = mean(female, na.rm = TRUE),
-    employed = mean(employed, na.rm = TRUE),
-    young_kids = mean(has_young_kids, na.rm = TRUE)
+
+    female_share      = mean(female, na.rm = TRUE),
+    employed_share    = mean(employed, na.rm = TRUE),
+    partnered_share   = mean(partnered, na.rm = TRUE),
+    white_ethnicity_share = mean(white_ethnicity, na.rm = TRUE),
+
+    young_kids_share    = mean(has_young_kids, na.rm = TRUE),
+    larger_family_share = mean(larger_family, na.rm = TRUE),
+
+    benefit_share    = mean(benefit_eligible, na.rm = TRUE),
+    disability_share = mean(disability, na.rm = TRUE)
   )
 
-summary_by_group
+summary_by_country
 ```
 
+```{r}
+# Summary statistics by country and post period
+summary_by_country_post <- df_analysis %>%
+  group_by(scotland, post) %>%
+  summarise(
+    N = n(),
+
+    ghq_mean = mean(ghq_likert, na.rm = TRUE),
+    age_mean = mean(age_dv, na.rm = TRUE),
+
+    female_share      = mean(female, na.rm = TRUE),
+    employed_share    = mean(employed, na.rm = TRUE),
+    partnered_share   = mean(partnered, na.rm = TRUE),
+    white_ethnicity_share = mean(white_ethnicity, na.rm = TRUE),
+
+    young_kids_share    = mean(has_young_kids, na.rm = TRUE),
+    larger_family_share = mean(larger_family, na.rm = TRUE),
+
+    benefit_share    = mean(benefit_eligible, na.rm = TRUE),
+    disability_share = mean(disability, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+summary_by_country_post$scotland <- ifelse(summary_by_country_post$scotland == 1, "Scotland", "England")
+summary_by_country_post$post <- ifelse(summary_by_country_post$post == 1, "Post-Nov 2022", "Pre-Nov 2022")
+
+summary_by_country_post
+```
+
+We now run the baseline DiD:
+
+```{r}
+# create factors
+df_analysis$year.f = factor(df_analysis$year)
+# Create factors
+df_analysis$year.f   <- factor(df_analysis$year)
+df_analysis$region.f <- factor(df_analysis$gor_dv)
+df_analysis$age_band <- factor(df_analysis$age_band)
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#          Main DiD              #
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+
+# (1) Baseline: minimal FE model
+reg1.all <- lm(
+  ghq_likert ~ scotland*eligible*post + region.f + year.f,
+  data = df_analysis
+)
+
+reg1 <- coeftest(reg1.all, vcovCL(reg1.all, cluster = ~ gor_dv))
+
+
+# (2) Preferred specification (FULL CONTROLS)
+reg2.all <- lm(
+  ghq_likert ~ scotland*eligible*post +
+    female +
+    employed +
+    partnered +
+    larger_family +
+    has_young_kids +
+    white_ethnicity +
+    disability +
+    age_band +
+    region.f + year.f,
+  data = df_analysis
+)
+
+reg2 <- coeftest(reg2.all, vcovCL(reg2.all, cluster = ~ gor_dv))
+
+
+# Output
+stargazer(reg1, reg2,
+          keep = c("scotland:eligible:post"),
+          type = "text")
+
+# Sample sizes
+cat("N reg1:", nobs(reg1.all), "\n")
+cat("N reg2:", nobs(reg2.all), "\n")
+```
+
+```{r}
+reg_sp.all <- lm(
+  ghq_likert ~ scotland * eligible * post * partnered +
+    female + employed + partnered +
+    larger_family + has_young_kids +
+    white_ethnicity + disability + age_band +
+    region.f + year.f,
+  data = df_analysis
+)
+
+reg_sp <- coeftest(reg_sp.all, vcovCL(reg_sp.all, cluster = ~ gor_dv))
+
+stargazer(reg_sp,
+  keep = c(
+    "scotland:eligible:post",
+    "scotland:eligible:post:partnered"
+  ),
+  type = "text"
+)
+```
+
+```{r}
+
+# Set omitted pre-treatment quarter
+df_analysis$yq.f <- relevel(df_analysis$yq.f, ref = "2019_Q4")
+
+# Region factor
+df_analysis$region.f <- factor(df_analysis$gor_dv)
+
+es_qtr.all <- lm(
+  ghq_likert ~ 
+    scotland:eligible:yq.f +   # coefficients of interest
+    scotland:yq.f +            # Scotland-specific quarter effects
+    eligible:yq.f +            # Eligible-group-specific quarter effects
+    scotland + eligible +
+    female + employed + partnered +
+    larger_family + has_young_kids +
+    white_ethnicity + disability + age_band +
+    region.f,
+  data = df_analysis
+)
+
+es_qtr <- coeftest(es_qtr.all, vcovCL(es_qtr.all, cluster = ~ gor_dv))
+
+# Show only event-study coefficients
+es_names <- grep("^scotland:eligible:yq.f", rownames(es_qtr), value = TRUE)
+
+stargazer(es_qtr, keep = es_names, type = "text")
+  
+```
+
+```{r}
+#-----------------------------------------------#
+# 3. Prepare data for plot
+#-----------------------------------------------#
+
+es_coef <- es_qtr[es_names, 1]
+es_se   <- es_qtr[es_names, 2]
+
+es_period <- gsub("scotland:eligible:yq.f", "", es_names)
+
+fig.dat <- data.frame(
+  period = es_period,
+  coef   = es_coef,
+  se     = es_se
+)
+
+# Order periods correctly
+period_levels <- levels(df_analysis$yq.f)
+period_levels <- period_levels[period_levels != "2019_Q4"]  # omitted category not plotted
+
+fig.dat$period <- factor(fig.dat$period, levels = period_levels)
+
+#-----------------------------------------------#
+# 4. Plot
+#-----------------------------------------------#
+
+ggplot(fig.dat, aes(x = period, y = coef, group = 1)) +
+  geom_pointrange(
+    aes(ymin = coef - 1.96 * se,
+        ymax = coef + 1.96 * se),
+    size = 0.4,
+    shape = 20
+  ) +
+  geom_line(linetype = "longdash") +
+  geom_hline(yintercept = 0, alpha = 0.3, size = 0.5) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ylab("Effect on GHQ score") +
+  xlab("Quarter (relative to 2019 Q4 omitted)") +
+  ggtitle("Quarterly event study: SCP and mental health")
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
 
