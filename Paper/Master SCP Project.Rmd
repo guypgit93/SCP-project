@@ -444,10 +444,64 @@ ggplot(fig.dat, aes(x = period, y = coef, group = 1)) +
 ```
 
 ```{r}
+#multiply by 4 so that each quarter is one step in a continuous timeline, allowing you to measure “distance from policy” correctly.
 
+df_analysis <- df_analysis %>%
+  mutate(
+    quarter = case_when(
+      month %in% 1:3   ~ 1,
+      month %in% 4:6   ~ 2,
+      month %in% 7:9   ~ 3,
+      month %in% 10:12 ~ 4
+    ),
+
+    # numeric quarter index
+    time_q = year * 4 + quarter,
+
+    # treatment quarter = 2022 Q4
+    treat_q = 2022 * 4 + 4,
+
+    # event time
+    event_time = time_q - treat_q
+  )
+```
+
+```{r}
+df_es <- df_analysis %>%
+  filter(event_time >= -8 & event_time <= 8)   # 2 years each side
 ```
 
 ```{r}
 
+df_analysis <- df_analysis %>%
+  mutate(
+    hh_income = ifelse(fihhmnnet1_dv < 0, NA, fihhmnnet1_dv)
+  )
+
+income_cutoff <- quantile(df$hh_income, 0.3, na.rm = TRUE)
+
+df_analysis <- df_analysis %>%
+  mutate(
+    low_income = ifelse(hh_income <= income_cutoff, 1, 0)
+  )
+
+df_analysis <- df_analysis %>%
+  mutate(
+    eligible_alt = ifelse(nkids015 > 0 & low_income == 1, 1, 0)
+  )
+
+df_analysis %>%
+  mutate(group = case_when(
+    scotland == 1 & eligible_alt == 1 ~ "Treated",
+    scotland == 1 & eligible_alt == 0 ~ "Scotland only",
+    scotland == 0 & eligible_alt == 1 ~ "Eligible only",
+    TRUE ~ "Control"
+  )) %>%
+  count(group, post)
+
+```
+```{r}
+mean(df_analysis$eligible, na.rm = TRUE)
+mean(df_analysis$eligible_alt, na.rm = TRUE)
 ```
 
