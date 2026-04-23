@@ -148,16 +148,6 @@ df <- df_longdata %>%
       health == 2 ~ 0,
       TRUE ~ NA_real_
     ),
-    
-    # Quarterly variables for event study
-    quarter = case_when(
-      month %in% 1:3   ~ "Q1",
-      month %in% 4:6   ~ "Q2",
-      month %in% 7:9   ~ "Q3",
-      month %in% 10:12 ~ "Q4"
-    ),
-    yq = paste0(year, "_", quarter),
-    yq.f = factor(yq)
   )
 
 # Pre-treatment income measure (keep for robustness only)
